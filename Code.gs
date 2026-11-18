@@ -37,6 +37,9 @@ function doPost(e) {
       case "EXTRACT_URL":
         return handleExtractUrl(payload, headers);
 
+      case "SEARCH_TIKTOK":
+        return handleSearchTikTok(payload, headers);
+
       default:
         return respondJson({ status: "error", message: "Invalid or unsupported action: " + action }, headers);
     }
@@ -66,6 +69,55 @@ function respondJson(data, headers) {
   const output = ContentService.createTextOutput(JSON.stringify(data));
   output.setMimeType(ContentService.MimeType.JSON);
   return output;
+}
+
+/**
+ * Helper to call RapidAPI with TikTok Host
+ */
+function callRapidApi(url, host = TIKTOK_HOST) {
+  const response = UrlFetchApp.fetch(url, {
+    method: "get",
+    headers: {
+      "x-rapidapi-key": RAPIDAPI_KEY,
+      "x-rapidapi-host": host
+    },
+    muteHttpExceptions: true
+  });
+  const text = response.getContentText();
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    Logger.log("JSON Parse error for " + url + ": " + e.toString());
+    return null;
+  }
+}
+
+/**
+ * Normalize TikTok item (supports .hdplay / .play watermark-free)
+ */
+function normalizeTikTokItem(item) {
+  if (!item) return null;
+  const now = Date.now();
+  const vidId = String(item.video_id || item.aweme_id || item.id || Math.random().toString(36).substring(7));
+  const authorNickname = item.author ? (item.author.nickname || item.author.unique_id) : "TikTok Creator";
+  const authorAvatar = item.author ? (item.author.avatar || item.author.avatar_thumb || "") : "";
+  const stream = item.hdplay || item.play || item.wmplay || (item.video && item.video.play_addr && item.video.play_addr.url_list ? item.video.play_addr.url_list[0] : "");
+
+  return {
+    id: "tt_" + vidId,
+    platform: "TIKTOK",
+    title: item.title || item.desc || "TikTok Video",
+    author: authorNickname,
+    avatar: authorAvatar || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
+    thumbnail: item.cover || item.origin_cover || "",
+    streamUrl: stream,
+    originalUrl: "https://www.tiktok.com/@" + (item.author && item.author.unique_id ? item.author.unique_id : "user") + "/video/" + vidId,
+    duration: item.duration || 0,
+    likes: item.digg_count || Math.floor(Math.random() * 2500) + 120,
+    comments: item.comment_count || Math.floor(Math.random() * 300) + 15,
+    shares: item.share_count || 0,
+    fetchedAt: now
+  };
 }
 
 /**
@@ -102,44 +154,23 @@ function handleVerifyAuth(payload, headers) {
 }
 
 /**
- * 2. Fetch & Combine Short Videos from RapidAPI
+ * 2. Fetch & Combine Short Videos from RapidAPI (TikTok Trending + YouTube Shorts)
  */
 function handleGetUnifiedFeed(payload, headers) {
   const region = payload.region || "VN";
   const items = [];
   const now = Date.now();
 
-  // A. Fetch TikTok Feed
+  // A. Fetch TikTok Feed (/feed/list?region=VN&count=15)
   try {
-    const ttUrl = "https://" + TIKTOK_HOST + "/feed/list?region=" + encodeURIComponent(region) + "&count=12";
-    const ttRes = UrlFetchApp.fetch(ttUrl, {
-      method: "get",
-      headers: {
-        "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": TIKTOK_HOST
-      },
-      muteHttpExceptions: true
-    });
+    const ttUrl = `https://${TIKTOK_HOST}/feed/list?region=${encodeURIComponent(region)}&count=15`;
+    const ttJson = callRapidApi(ttUrl, TIKTOK_HOST);
 
-    if (ttRes.getResponseCode() === 200) {
-      const ttData = JSON.parse(ttRes.getContentText());
-      const videoList = (ttData && ttData.data) ? ttData.data : [];
-      videoList.forEach(v => {
-        const streamUrl = v.play || v.wmplay || (v.video && v.video.play_addr && v.video.play_addr.url_list ? v.video.play_addr.url_list[0] : "");
-        if (streamUrl) {
-          items.push({
-            id: "tt_" + (v.id || v.video_id || Math.random().toString(36).substring(7)),
-            platform: "TIKTOK",
-            title: v.title || v.desc || "Trending TikTok",
-            author: (v.author && (v.author.nickname || v.author.unique_id)) ? (v.author.nickname || v.author.unique_id) : "TikTok Creator",
-            avatar: (v.author && (v.author.avatar_thumb || v.author.avatar)) ? (v.author.avatar_thumb || v.author.avatar) : "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
-            thumbnail: v.cover || v.origin_cover || "",
-            streamUrl: streamUrl,
-            originalUrl: "https://www.tiktok.com/@" + (v.author ? v.author.unique_id : "user") + "/video/" + (v.video_id || v.id || ""),
-            likes: v.digg_count || Math.floor(Math.random() * 2500) + 120,
-            comments: v.comment_count || Math.floor(Math.random() * 300) + 15,
-            fetchedAt: now
-          });
+    if (ttJson && ttJson.data && Array.isArray(ttJson.data)) {
+      ttJson.data.forEach(rawItem => {
+        const normalized = normalizeTikTokItem(rawItem);
+        if (normalized && normalized.streamUrl) {
+          items.push(normalized);
         }
       });
     }
@@ -150,20 +181,10 @@ function handleGetUnifiedFeed(payload, headers) {
   // B. Fetch YouTube Shorts Search
   try {
     const ytUrl = "https://yt-api.p.rapidapi.com/search?query=shorts&type=shorts";
-    const ytRes = UrlFetchApp.fetch(ytUrl, {
-      method: "get",
-      headers: {
-        "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": "yt-api.p.rapidapi.com"
-      },
-      muteHttpExceptions: true
-    });
+    const ytJson = callRapidApi(ytUrl, "yt-api.p.rapidapi.com");
 
-    if (ytRes.getResponseCode() === 200) {
-      const ytData = JSON.parse(ytRes.getContentText());
-      const rawYtList = (ytData && ytData.data) ? ytData.data : [];
-      // Pick up to 5 shorts to resolve dl streams
-      const shortItems = rawYtList.slice(0, 5);
+    if (ytJson && ytJson.data && Array.isArray(ytJson.data)) {
+      const shortItems = ytJson.data.slice(0, 5);
 
       shortItems.forEach(item => {
         const vidId = item.videoId || item.id;
@@ -171,20 +192,10 @@ function handleGetUnifiedFeed(payload, headers) {
 
         let streamUrl = "";
         try {
-          const dlRes = UrlFetchApp.fetch("https://yt-api.p.rapidapi.com/dl?id=" + encodeURIComponent(vidId), {
-            method: "get",
-            headers: {
-              "x-rapidapi-key": RAPIDAPI_KEY,
-              "x-rapidapi-host": "yt-api.p.rapidapi.com"
-            },
-            muteHttpExceptions: true
-          });
-          if (dlRes.getResponseCode() === 200) {
-            const dlData = JSON.parse(dlRes.getContentText());
-            if (dlData && dlData.formats && dlData.formats.length > 0) {
-              const mp4Format = dlData.formats.find(f => f.mimeType && f.mimeType.includes("video/mp4") && f.url);
-              streamUrl = mp4Format ? mp4Format.url : dlData.formats[0].url;
-            }
+          const dlJson = callRapidApi("https://yt-api.p.rapidapi.com/dl?id=" + encodeURIComponent(vidId), "yt-api.p.rapidapi.com");
+          if (dlJson && dlJson.formats && dlJson.formats.length > 0) {
+            const mp4Format = dlJson.formats.find(f => f.mimeType && f.mimeType.includes("video/mp4") && f.url);
+            streamUrl = mp4Format ? mp4Format.url : dlJson.formats[0].url;
           }
         } catch (e) {
           Logger.log("DL format error for YT " + vidId + ": " + e.toString());
@@ -201,6 +212,7 @@ function handleGetUnifiedFeed(payload, headers) {
           originalUrl: "https://www.youtube.com/shorts/" + vidId,
           likes: Math.floor(Math.random() * 8000) + 500,
           comments: Math.floor(Math.random() * 450) + 30,
+          shares: Math.floor(Math.random() * 150) + 10,
           fetchedAt: now
         });
       });
@@ -220,7 +232,31 @@ function handleGetUnifiedFeed(payload, headers) {
 }
 
 /**
- * 3. Extract & Normalize URL (TikTok / Facebook Reel / YouTube Shorts)
+ * 3. Search TikTok Videos by keyword
+ */
+function handleSearchTikTok(payload, headers) {
+  const keyword = (payload.keyword || "trending").trim();
+  const count = payload.count || 15;
+  const endpoint = `https://${TIKTOK_HOST}/feed/search?keywords=${encodeURIComponent(keyword)}&region=VN&count=${count}`;
+
+  try {
+    const json = callRapidApi(endpoint, TIKTOK_HOST);
+    if (!json || !json.data || !json.data.videos) {
+      return respondJson({ status: "success", data: [] }, headers);
+    }
+
+    const results = json.data.videos
+      .map(item => normalizeTikTokItem(item))
+      .filter(item => item && item.streamUrl);
+
+    return respondJson({ status: "success", data: results }, headers);
+  } catch (e) {
+    return respondJson({ status: "error", message: e.toString() }, headers);
+  }
+}
+
+/**
+ * 4. Extract & Normalize URL (TikTok / Facebook Reel / YouTube Shorts)
  */
 function handleExtractUrl(payload, headers) {
   const url = (payload.url || "").trim();
@@ -230,42 +266,20 @@ function handleExtractUrl(payload, headers) {
 
   const now = Date.now();
 
-  // Check 1: TikTok
+  // Check 1: TikTok (Extract with hd=1 for link mp4 không logo)
   if (/tiktok\.com/i.test(url)) {
     try {
-      const endpoint = "https://" + TIKTOK_HOST + "/?url=" + encodeURIComponent(url);
-      const res = UrlFetchApp.fetch(endpoint, {
-        method: "get",
-        headers: {
-          "x-rapidapi-key": RAPIDAPI_KEY,
-          "x-rapidapi-host": TIKTOK_HOST
-        },
-        muteHttpExceptions: true
-      });
+      const endpoint = `https://${TIKTOK_HOST}/?url=${encodeURIComponent(url)}&hd=1`;
+      const json = callRapidApi(endpoint, TIKTOK_HOST);
 
-      if (res.getResponseCode() === 200) {
-        const body = JSON.parse(res.getContentText());
-        const data = body.data || body;
-        const stream = data.play || data.wmplay || (data.video && data.video.play_addr && data.video.play_addr.url_list ? data.video.play_addr.url_list[0] : "");
-
-        const resultItem = {
-          id: "tt_" + (data.id || data.video_id || Math.random().toString(36).substring(7)),
-          platform: "TIKTOK",
-          title: data.title || data.desc || "TikTok Short",
-          author: (data.author && (data.author.nickname || data.author.unique_id)) ? (data.author.nickname || data.author.unique_id) : "TikTok Creator",
-          avatar: (data.author && (data.author.avatar_thumb || data.author.avatar)) ? (data.author.avatar_thumb || data.author.avatar) : "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
-          thumbnail: data.cover || data.origin_cover || "",
-          streamUrl: stream,
-          originalUrl: url,
-          likes: data.digg_count || Math.floor(Math.random() * 1200) + 100,
-          comments: data.comment_count || Math.floor(Math.random() * 150) + 10,
-          fetchedAt: now
-        };
-
-        return respondJson({ status: "success", data: resultItem }, headers);
-      } else {
-        return respondJson({ status: "error", message: "TikTok API returned status " + res.getResponseCode() }, headers);
+      if (json && json.data) {
+        const item = normalizeTikTokItem(json.data);
+        if (item) {
+          item.originalUrl = url;
+          return respondJson({ status: "success", data: item }, headers);
+        }
       }
+      return respondJson({ status: "error", message: "Không lấy được dữ liệu video từ URL TikTok này" }, headers);
     } catch (e) {
       return respondJson({ status: "error", message: "TikTok Extraction Failed: " + e.toString() }, headers);
     }
@@ -275,17 +289,9 @@ function handleExtractUrl(payload, headers) {
   if (/facebook\.com|fb\.watch/i.test(url)) {
     try {
       const endpoint = "https://facebook-reel-and-video-downloader.p.rapidapi.com/app/main.php?url=" + encodeURIComponent(url);
-      const res = UrlFetchApp.fetch(endpoint, {
-        method: "get",
-        headers: {
-          "x-rapidapi-key": RAPIDAPI_KEY,
-          "x-rapidapi-host": "facebook-reel-and-video-downloader.p.rapidapi.com"
-        },
-        muteHttpExceptions: true
-      });
+      const data = callRapidApi(endpoint, "facebook-reel-and-video-downloader.p.rapidapi.com");
 
-      if (res.getResponseCode() === 200) {
-        const data = JSON.parse(res.getContentText());
+      if (data) {
         const stream = data.hd || data.sd || (data.links && (data.links.hd || data.links.sd)) || "";
         const thumb = data.thumbnail || data.picture || "";
 
@@ -300,12 +306,13 @@ function handleExtractUrl(payload, headers) {
           originalUrl: url,
           likes: Math.floor(Math.random() * 3200) + 150,
           comments: Math.floor(Math.random() * 200) + 20,
+          shares: Math.floor(Math.random() * 80) + 5,
           fetchedAt: now
         };
 
         return respondJson({ status: "success", data: resultItem }, headers);
       } else {
-        return respondJson({ status: "error", message: "Facebook API returned status " + res.getResponseCode() }, headers);
+        return respondJson({ status: "error", message: "Facebook API returned invalid data" }, headers);
       }
     } catch (e) {
       return respondJson({ status: "error", message: "Facebook Extraction Failed: " + e.toString() }, headers);
@@ -329,19 +336,11 @@ function handleExtractUrl(payload, headers) {
       }
 
       const endpoint = "https://yt-api.p.rapidapi.com/dl?id=" + encodeURIComponent(vidId);
-      const res = UrlFetchApp.fetch(endpoint, {
-        method: "get",
-        headers: {
-          "x-rapidapi-key": RAPIDAPI_KEY,
-          "x-rapidapi-host": "yt-api.p.rapidapi.com"
-        },
-        muteHttpExceptions: true
-      });
+      const data = callRapidApi(endpoint, "yt-api.p.rapidapi.com");
 
-      if (res.getResponseCode() === 200) {
-        const data = JSON.parse(res.getContentText());
+      if (data) {
         let stream = "";
-        if (data && data.formats && data.formats.length > 0) {
+        if (data.formats && data.formats.length > 0) {
           const mp4Format = data.formats.find(f => f.mimeType && f.mimeType.includes("video/mp4") && f.url);
           stream = mp4Format ? mp4Format.url : data.formats[0].url;
         }
@@ -359,12 +358,13 @@ function handleExtractUrl(payload, headers) {
           originalUrl: url,
           likes: data.viewCount ? Math.floor(parseInt(data.viewCount) * 0.05) : 1850,
           comments: Math.floor(Math.random() * 220) + 40,
+          shares: Math.floor(Math.random() * 110) + 12,
           fetchedAt: now
         };
 
         return respondJson({ status: "success", data: resultItem }, headers);
       } else {
-        return respondJson({ status: "error", message: "YouTube DL API returned status " + res.getResponseCode() }, headers);
+        return respondJson({ status: "error", message: "YouTube DL API returned invalid data" }, headers);
       }
     } catch (e) {
       return respondJson({ status: "error", message: "YouTube Extraction Failed: " + e.toString() }, headers);
