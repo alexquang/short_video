@@ -22,6 +22,7 @@
   <!-- Tailwind CSS CDN -->
   <script src='https://cdn.tailwindcss.com'></script>
   <script>
+  //<![CDATA[
     tailwind.config = {
       darkMode: 'class',
       theme: {
@@ -39,6 +40,7 @@
         }
       }
     }
+  //]]>
   </script>
 
   <!-- Lucide Icons -->
@@ -46,6 +48,7 @@
 
   <!-- Firebase v10+ Modular SDK via ESM -->
   <script type='module'>
+  //<![CDATA[
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
     import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
     import { 
@@ -90,6 +93,7 @@
 
     // Emit event when Firebase module is ready
     window.dispatchEvent(new CustomEvent('firebase-ready'));
+  //]]>
   </script>
 </head>
 <body class='bg-[#090a0f] text-gray-100 flex flex-col md:flex-row h-screen w-screen overflow-hidden select-none'>
@@ -360,6 +364,7 @@
 
   <!-- APPLICATION LOGIC & DOM VIRTUALIZATION SCRIPT -->
   <script>
+  //<![CDATA[
     window.addEventListener('firebase-ready', () => {
       initApp();
     });
@@ -1045,6 +1050,7 @@
       // Initial feed load
       loadFeedWithSmartCache();
     }
+  //]]>
   </script>
 </body>
 </html>
