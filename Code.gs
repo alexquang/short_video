@@ -5,6 +5,7 @@
  */
 
 const RAPIDAPI_KEY = "43c8a1a325msh85f5d0c88137effp15a4dfjsn3e940067814b";
+const TIKTOK_HOST = "tiktok-scraper7.p.rapidapi.com";
 
 function doPost(e) {
   const headers = {
@@ -110,12 +111,12 @@ function handleGetUnifiedFeed(payload, headers) {
 
   // A. Fetch TikTok Feed
   try {
-    const ttUrl = "https://tiktok-scraper7.p.rapidapi.com/feed/list?region=" + encodeURIComponent(region) + "&count=12";
+    const ttUrl = "https://" + TIKTOK_HOST + "/feed/list?region=" + encodeURIComponent(region) + "&count=12";
     const ttRes = UrlFetchApp.fetch(ttUrl, {
       method: "get",
       headers: {
         "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": "tiktok-scraper7.p.rapidapi.com"
+        "x-rapidapi-host": TIKTOK_HOST
       },
       muteHttpExceptions: true
     });
@@ -232,12 +233,12 @@ function handleExtractUrl(payload, headers) {
   // Check 1: TikTok
   if (/tiktok\.com/i.test(url)) {
     try {
-      const endpoint = "https://tiktok-scraper7.p.rapidapi.com/?url=" + encodeURIComponent(url);
+      const endpoint = "https://" + TIKTOK_HOST + "/?url=" + encodeURIComponent(url);
       const res = UrlFetchApp.fetch(endpoint, {
         method: "get",
         headers: {
           "x-rapidapi-key": RAPIDAPI_KEY,
-          "x-rapidapi-host": "tiktok-scraper7.p.rapidapi.com"
+          "x-rapidapi-host": TIKTOK_HOST
         },
         muteHttpExceptions: true
       });
